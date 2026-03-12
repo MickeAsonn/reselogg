@@ -1,11 +1,12 @@
 
-// Safety: remove any old service workers if they exist (from earlier builds)
+// Kill any old service workers
 if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister())).catch(()=>{});}
 
 (function(){
   let map, marker, polyline; let watchId=null; let points=[]; let totalKm=0; let startTime=null, stopTime=null;
   const $=id=>document.getElementById(id);
   const statusEl=$('status'), kmEl=$('km');
+  const exportExcelBtn=$('exportExcelBtn');
 
   function init(){
     map=L.map('map');
@@ -24,7 +25,7 @@ if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then
     polyline.setLatLngs([]); if(marker){ map.removeLayer(marker); marker=null; }
     watchId=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
     $('startBtn').disabled=true; $('stopBtn').disabled=false;
-    $('exportExcelBtn').disabled=true; $('exportPdfBtn').disabled=true;
+    exportExcelBtn.disabled=true;
   };
 
   function onPos(pos){
@@ -40,12 +41,28 @@ if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then
     if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
     stopTime=new Date(); statusEl.textContent='Status: Klar';
     $('startBtn').disabled=false; $('stopBtn').disabled=true;
-    const enabled=points.length>0; $('exportExcelBtn').disabled = $('exportPdfBtn').disabled = !enabled;
+    // Gör export Excel klickbar även om det bara blev 0 punkter, enligt önskemål
+    exportExcelBtn.disabled=false;
   };
 
   function buildTrip(){ return { date:(startTime||new Date()).toISOString().slice(0,10), startTime:startTime?startTime.toISOString():null, stopTime:stopTime?stopTime.toISOString():null, totalKm:Number(totalKm.toFixed(3)), points:points.slice() }; }
 
   function rowsFromTrip(t){ const r=[["Datum",t.date],["Starttid",t.startTime||''],["Stopptid",t.stopTime||''],["Total km",t.totalKm],[],["Tid (ISO)","Lat","Lon"]]; for(const p of t.points) r.push([new Date(p.ts).toISOString(),p.lat,p.lon]); return r; }
-  $('exportExcelBtn').onclick=()=>{ const t=buildTrip(); const wb=XLSX.utils.book_new(), ws=XLSX.utils.aoa_to_sheet(rowsFromTrip(t)); XLSX.utils.book_append_sheet(wb,ws,'Resa'); const safe=(t.date||'resa').replace(/[^0-9A-Za-z_-]/g,'-'); XLSX.writeFile(wb,`resa_${safe}.xlsx`); };
-  $('exportPdfBtn').onclick=()=>{ const t=buildTrip(); const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); let y=40; doc.setFontSize(16); doc.text('Reselogger – Rapport',40,y); y+=24; doc.setFontSize(12); for(const line of [`Datum: ${t.date}`,`Starttid: ${t.startTime||''}`,`Stopptid: ${t.stopTime||''}`,`Total sträcka: ${t.totalKm.toFixed(2)} km`]){ doc.text(line,40,y); y+=18; } y+=8; doc.text('Tid (ISO)',40,y); doc.text('Lat',280,y); doc.text('Lon',380,y); y+=16; const step=Math.max(1,Math.floor(t.points.length/40)); for(let i=0;i<t.points.length;i+=step){ const p=t.points[i]; doc.text(new Date(p.ts).toISOString(),40,y); doc.text((p.lat||0).toFixed(6),280,y); doc.text((p.lon||0).toFixed(6),380,y); y+=16; if(y>800){ doc.addPage(); y=40; } } const safe=(t.date||'resa').replace(/[^0-9A-Za-z_-]/g,'-'); doc.save(`resa_${safe}.pdf`); };
+
+  function exportExcel(t){
+    try{
+      const wb=XLSX.utils.book_new();
+      const ws=XLSX.utils.aoa_to_sheet(rowsFromTrip(t));
+      XLSX.utils.book_append_sheet(wb,ws,'Resa');
+      const safe=(t.date||'resa').replace(/[^0-9A-Za-z_-]/g,'-');
+      XLSX.writeFile(wb,`resa_${safe}.xlsx`);
+    }catch(e){
+      alert('Kunde inte skapa Excel. Prova i Safari eller Chrome.');
+      console.error(e);
+    }
+  }
+
+  // Gör knappen klickbar i alla lägen efter Stoppa
+  exportExcelBtn.addEventListener('click', ()=> exportExcel(buildTrip()));
+
 })();
