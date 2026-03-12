@@ -1,4 +1,7 @@
 
+document.getElementById('build-id').textContent = 'github-bodyfix-v5-' + new Date().toISOString();
+console.log('BUILD TAG:', document.getElementById('build-id').textContent);
+
 (function(){let map,marker,polyline,watchId=null,points=[],totalKm=0,startTime=null,stopTime=null;
 const $=id=>document.getElementById(id);
 
