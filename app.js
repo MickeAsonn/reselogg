@@ -1,91 +1,51 @@
 
-// REMOVE ALL SERVICE WORKERS
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
-}
+// Safety: remove any old service workers if they exist (from earlier builds)
+if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister())).catch(()=>{});}
 
-(function(){let map,marker,polyline,watchId=null,points=[],totalKm=0,startTime=null,stopTime=null;
-const $=id=>document.getElementById(id);
+(function(){
+  let map, marker, polyline; let watchId=null; let points=[]; let totalKm=0; let startTime=null, stopTime=null;
+  const $=id=>document.getElementById(id);
+  const statusEl=$('status'), kmEl=$('km');
 
-function init(){
-  map=L.map('map');
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-  polyline=L.polyline([], {color:'#1976d2'}).addTo(map);
-  map.setView([58.5877,16.1924],12);
-}
-init();
+  function init(){
+    map=L.map('map');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+    polyline=L.polyline([], {color:'#1976d2',weight:5}).addTo(map);
+    map.setView([58.5877,16.1924],12);
+  }
+  init();
 
-function dist(a,b){const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLon=(b.lon-a.lon)*Math.PI/180;const h=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2;return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));}
-function update(){ $('km').textContent=`Totalt: ${totalKm.toFixed(2)} km`; }
+  function dist(a,b){const R=6371;const dLat=(b.lat-a.lat)*Math.PI/180,dLon=(b.lon-a.lon)*Math.PI/180;const la1=a.lat*Math.PI/180,la2=b.lat*Math.PI/180;const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));}
+  function updateKm(){ kmEl.textContent=`Totalt: ${totalKm.toFixed(2)} km`; }
 
-$('startBtn').onclick=()=>{
-  points=[]; totalKm=0; startTime=new Date(); $('status').textContent='Registrerar…';
-  polyline.setLatLngs([]);
-  if(marker){ map.removeLayer(marker); marker=null; }
-  watchId=navigator.geolocation.watchPosition(onPos,console.error,{enableHighAccuracy:true});
-  $('startBtn').disabled=true;
-  $('stopBtn').disabled=false;
-};
+  $('startBtn').onclick=()=>{
+    points=[]; totalKm=0; startTime=new Date(); stopTime=null; updateKm();
+    statusEl.textContent='Status: Registrerar…';
+    polyline.setLatLngs([]); if(marker){ map.removeLayer(marker); marker=null; }
+    watchId=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+    $('startBtn').disabled=true; $('stopBtn').disabled=false;
+    $('exportExcelBtn').disabled=true; $('exportPdfBtn').disabled=true;
+  };
 
-$('stopBtn').onclick=()=>{
-  if(watchId){ navigator.geolocation.clearWatch(watchId); watchId=null; }
-  stopTime=new Date(); $('status').textContent='Klar';
-  $('startBtn').disabled=false;
-  $('stopBtn').disabled=true;
-  const ok=points.length>0;
-  $('exportExcelBtn').disabled=!ok;
-  $('exportPdfBtn').disabled=!ok;
-  saveTripLocal(build());
-};
+  function onPos(pos){
+    const {latitude,longitude}=pos.coords; const p={lat:latitude,lon:longitude,ts:Date.now()};
+    if(points.length){ const km=dist(points[points.length-1],p); if(km<2){ totalKm+=km; updateKm(); } }
+    else { map.setView([p.lat,p.lon],15); }
+    points.push(p); polyline.addLatLng([p.lat,p.lon]);
+    if(!marker) marker=L.marker([p.lat,p.lon]).addTo(map); marker.setLatLng([p.lat,p.lon]);
+  }
+  function onErr(err){ statusEl.textContent='Geo-fel: '+err.message; }
 
-function onPos(pos){
-  const p={lat:pos.coords.latitude,lon:pos.coords.longitude,ts:Date.now()};
-  if(points.length){ const km=dist(points[points.length-1],p); if(km<2){ totalKm+=km; update(); } }
-  else map.setView([p.lat,p.lon],15);
+  $('stopBtn').onclick=()=>{
+    if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
+    stopTime=new Date(); statusEl.textContent='Status: Klar';
+    $('startBtn').disabled=false; $('stopBtn').disabled=true;
+    const enabled=points.length>0; $('exportExcelBtn').disabled = $('exportPdfBtn').disabled = !enabled;
+  };
 
-  points.push(p);
-  polyline.addLatLng([p.lat,p.lon]);
+  function buildTrip(){ return { date:(startTime||new Date()).toISOString().slice(0,10), startTime:startTime?startTime.toISOString():null, stopTime:stopTime?stopTime.toISOString():null, totalKm:Number(totalKm.toFixed(3)), points:points.slice() }; }
 
-  if(!marker) marker=L.marker([p.lat,p.lon]).addTo(map);
-  marker.setLatLng([p.lat,p.lon]);
-}
-
-function build(){return{id:startTime.toISOString(),date:startTime.toISOString().slice(0,10),startTime:startTime.toISOString(),stopTime:stopTime.toISOString(),totalKm:Number(totalKm.toFixed(2)),points:points}}
-
-// IndexedDB
-const DB='reselogger',STORE='trips';
-function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=> r.result.createObjectStore(STORE,{keyPath:'id'});r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
-async function saveTripLocal(t){const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(t);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);});}
-async function listTrips(){const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction(STORE,'readonly');const rq=tx.objectStore(STORE).getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>rej(rq.error);});}
-async function delTrip(id){const db=await openDB();db.transaction(STORE,'readwrite').objectStore(STORE).delete(id);}
-async function clearAll(){const db=await openDB();db.transaction(STORE,'readwrite').objectStore(STORE).clear();}
-
-$('clearLastBtn').onclick=async()=>{
-  const t=await listTrips(); if(!t.length) return alert('Ingen historik');
-  if(!confirm('Rensa senaste?')) return;
-  await delTrip(t[t.length-1].id);
-  alert('Rensad');
-};
-$('clearAllBtn').onclick=async()=>{
-  if(!confirm('Rensa ALL historik?')) return;
-  await clearAll();
-  alert('Allt rensat');
-};
-
-function rows(t){const r=[["Datum",t.date],["Start",t.startTime],["Stop",t.stopTime],["Km",t.totalKm],[],["Tid","Lat","Lon"]];for(const p of t.points) r.push([new Date(p.ts).toISOString(),p.lat,p.lon]);return r;}
-$('exportExcelBtn').onclick=()=>{const t=build();const wb=XLSX.utils.book_new();const ws=XLSX.utils.aoa_to_sheet(rows(t));XLSX.utils.book_append_sheet(wb,ws,'Resa');XLSX.writeFile(wb,`resa_${t.date}.xlsx`)}
-$('exportPdfBtn').onclick=()=>{const t=build();const{jsPDF}=window.jspdf;const doc=new jsPDF();let y=10;rows(t).forEach(r=>{doc.text(String(r),10,y);y+=10;if(y>280) doc.addPage();});doc.save(`resa_${t.date}.pdf`)}
-
-// SAFARI FIX — hide map fully
-$('historyBtn').onclick=async()=>{
-  const list=await listTrips();const box=$('historyList');box.innerHTML='';
-  list.forEach(t=>{const d=document.createElement('div');d.textContent=t.date+' '+t.totalKm+' km';d.style.padding='8px';d.style.margin='6px 0';d.style.border='1px solid #ccc';d.onclick=()=>{points=t.points;totalKm=t.totalKm;polyline.setLatLngs(t.points.map(p=>[p.lat,p.lon]));update();};box.appendChild(d);});
-  $('historyModal').classList.remove('hidden');
-  const m=document.getElementById('map'); m.style.visibility='hidden'; m.style.pointerEvents='none';
-};
-$('closeHistory').onclick=()=>{
-  $('historyModal').classList.add('hidden');
-  const m=document.getElementById('map'); m.style.visibility='visible'; m.style.pointerEvents='auto';
-};
-
+  function rowsFromTrip(t){ const r=[["Datum",t.date],["Starttid",t.startTime||''],["Stopptid",t.stopTime||''],["Total km",t.totalKm],[],["Tid (ISO)","Lat","Lon"]]; for(const p of t.points) r.push([new Date(p.ts).toISOString(),p.lat,p.lon]); return r; }
+  $('exportExcelBtn').onclick=()=>{ const t=buildTrip(); const wb=XLSX.utils.book_new(), ws=XLSX.utils.aoa_to_sheet(rowsFromTrip(t)); XLSX.utils.book_append_sheet(wb,ws,'Resa'); const safe=(t.date||'resa').replace(/[^0-9A-Za-z_-]/g,'-'); XLSX.writeFile(wb,`resa_${safe}.xlsx`); };
+  $('exportPdfBtn').onclick=()=>{ const t=buildTrip(); const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); let y=40; doc.setFontSize(16); doc.text('Reselogger – Rapport',40,y); y+=24; doc.setFontSize(12); for(const line of [`Datum: ${t.date}`,`Starttid: ${t.startTime||''}`,`Stopptid: ${t.stopTime||''}`,`Total sträcka: ${t.totalKm.toFixed(2)} km`]){ doc.text(line,40,y); y+=18; } y+=8; doc.text('Tid (ISO)',40,y); doc.text('Lat',280,y); doc.text('Lon',380,y); y+=16; const step=Math.max(1,Math.floor(t.points.length/40)); for(let i=0;i<t.points.length;i+=step){ const p=t.points[i]; doc.text(new Date(p.ts).toISOString(),40,y); doc.text((p.lat||0).toFixed(6),280,y); doc.text((p.lon||0).toFixed(6),380,y); y+=16; if(y>800){ doc.addPage(); y=40; } } const safe=(t.date||'resa').replace(/[^0-9A-Za-z_-]/g,'-'); doc.save(`resa_${safe}.pdf`); };
 })();
